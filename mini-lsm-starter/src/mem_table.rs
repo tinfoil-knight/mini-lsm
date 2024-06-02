@@ -74,10 +74,7 @@ impl MemTable {
 
     /// Get a value by key.
     pub fn get(&self, key: &[u8]) -> Option<Bytes> {
-        match self.map.get(key) {
-            Some(e) => Some(e.value().to_owned()),
-            None => None,
-        }
+        self.map.get(key).map(|e| e.value().to_owned())
     }
 
     /// Put a key-value pair into the mem-table.
