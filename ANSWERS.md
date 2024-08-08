@@ -4,7 +4,11 @@
 * Why doesn't the memtable provide a `delete` API?
     - Putting an empty byte-array is equivalent to a `delete` operation for the parent Lsm structure. That's why a `delete` API isn't needed.
 * Is it possible to use other data structures as the memtable in LSM? What are the pros/cons of using the skiplist?
-    - ?
+    - Yes. Any data structure that supports setting and getting key-value is sufficient.
+      - It being ordered isn't necessary if a sequential scan operation isn't needed.
+    - Difficult to use contiguous memory in Skiplists compared to BTree.
+    - Skiplists are probabilistic in nature and might get unbalanced with time.
+    - Skiplists are faster than BTree for in-memory workloads.
 * Why do we need a combination of `state` and `state_lock`? Can we only use `state.read()` and `state.write()`?
     - We're acquiring a write-lock on `state` to prevent any other r-w operations on the current memtable. We need to acquire the lock on `state_lock` before it to prevent multiple threads from freezing the current memtable since they'd get the lock one by one & the second thread would just freeze an barely-filled memtable.
     - The `put` method checks if the size of current memtable has reached capacity or not but the method force freezing the memtable shouldn't do this since it can be called in another scenarios (eg. graceful shutdown) which aren't triggered by the memtable reaching capacity. It should be able to acquire a write-lock and prevent any other operations though.

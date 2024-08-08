@@ -338,6 +338,7 @@ impl LsmStorageInner {
 
     /// Force freeze the current memtable to an immutable memtable
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
+        // SEEN 1.1T3 - Wasn't able to swap the old and new memtable
         let mut guard = self.state.write();
         let mut state = guard.as_ref().clone();
 
