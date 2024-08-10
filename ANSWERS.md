@@ -23,3 +23,26 @@
     - We acquire a write lock on current memtable and a lock of the current LSM state before changing the current memtable. It isn't possible for other threads to hold the old LSM state and write to the now immutable memtable.
 * There are several places that you might first acquire a read lock on state, then drop it and acquire a write lock (these two operations might be in different functions but they happened sequentially due to one function calls the other). How does it differ from directly upgrading the read lock to a write lock? Is it necessary to upgrade instead of acquiring and dropping and what is the cost of doing the upgrade?
     - ?
+
+## DAY 2
+* What is the time/space complexity of using your merge iterator?
+ - The memtable and the binary heap holding the memtable iterators are already sorted.
+ - In the worst case, I'd need to check and skip a duplicate item from the head of every iterator.
+ - The worst case time complexity of getting a single element from the iterator would be O(n) where n is the no. of memtables.
+* Why do we need a self-referential structure for memtable iterator?
+ - So that the iterator doesn't refer to an invalid memtable that is already freed from memory.
+* If a key is removed (there is a delete tombstone), do you need to return it to the user? Where did you handle this logic?
+ - No. In the implementation for LsmStorageInner which calls the MemTable.put() method.
+* If a key has multiple versions, will the user see all of them? Where did you handle this logic?
+ - The user will only see the recent-most update for the key. We're iterating over all memtables in order in the LsmStorageInner.get() method.
+* If we want to get rid of self-referential structure and have a lifetime on the memtable iterator (i.e., `MemtableIterator<'a>`, where `'a` = memtable or `LsmStorageInner` lifetime), is it still possible to implement the `scan` functionality?
+  - ?
+* What happens if (1) we create an iterator on the skiplist memtable (2) someone inserts new keys into the memtable (3) will the iterator see the new key?
+  - For the crossbeam_skiplist map, if the keys inserted are after the current iterator position then the iterator will see them otherwise not.
+* What happens if your key comparator cannot give the binary heap implementation a stable order?
+  - If the binary heap doesn't maintain the insertion order when it encounters duplicates, we'd getting stale values for keys because it would re-order the memtables.
+* Why do we need to ensure the merge iterator returns data in the iterator construction order?
+  - Because the recent most update for a key is in the latest table.
+* Is it possible to implement a Rust-style iterator (i.e., `next(&self) -> (Key, Value)`) for LSM iterators? What are the pros/cons?
+* The scan interface is like `fn scan(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>)`. How to make this API compatible with Rust-style range (i.e., `key_a..key_b`)? If you implement this, try to pass a full range `..` to the interface and see what will happen.
+* The starter code provides the merge iterator interface to store `Box<I>` instead of `I`. What might be the reason behind that?
