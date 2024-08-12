@@ -29,9 +29,9 @@ impl BlockBuilder {
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
         let (key_len, value_len) = (key.len(), value.len());
-        let current_block_size = self.data.len() + self.offsets.len() * 2;
+        let current_block_size = self.data.len();
         let increase = 2 + key_len + 2 + value_len + 2;
-        let expected_block_size = current_block_size + increase + 2;
+        let expected_block_size = current_block_size + increase + (self.offsets.len() + 1) * 2 + 2;
 
         let is_first = self.is_empty();
         if expected_block_size > self.block_size && !is_first {
@@ -40,7 +40,7 @@ impl BlockBuilder {
         self.offsets.push(if is_first {
             0
         } else {
-            current_block_size as u16 - 1
+            current_block_size as u16
         });
         let pair = [
             &(key_len as u16).to_le_bytes(),
