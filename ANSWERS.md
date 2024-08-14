@@ -46,3 +46,20 @@
 * Is it possible to implement a Rust-style iterator (i.e., `next(&self) -> (Key, Value)`) for LSM iterators? What are the pros/cons?
 * The scan interface is like `fn scan(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>)`. How to make this API compatible with Rust-style range (i.e., `key_a..key_b`)? If you implement this, try to pass a full range `..` to the interface and see what will happen.
 * The starter code provides the merge iterator interface to store `Box<I>` instead of `I`. What might be the reason behind that?
+
+## DAY 3
+* What is the time complexity of seeking a key in the block?
+- If you don't have the offset, then the time complexity would be O(logn) since a block stores ordered keys and we can perform binary search.
+* Where does the cursor stop when you seek a non-existent key in your implementation?
+- At the end since I'm seeking sequentially instead of performing a binary search.
+* So `Block` is simply a vector of raw data and a vector of offsets. Can we change them to `Byte` and `Arc<[u16]>`, and change all the iterator interfaces to return `Byte` instead of `&[u8]`? (Assume that we use `Byte::slice` to return a slice of the block without copying.) What are the pros/cons?
+* What is the endian of the numbers written into the blocks in your implementation?
+- Little endian
+* Is your implementation prune to a maliciously-built block? Will there be invalid memory access, or OOMs, if a user deliberately construct an invalid block?
+- Yes. Yes.
+* Can a block contain duplicated keys?
+- Yes.
+* What happens if the user adds a key larger than the target block size?
+- If it's not the first key being added to the block, it's ignored.
+* Consider the case that the LSM engine is built on object store services (S3). How would you optimize/change the block format and parameters to make it suitable for such services?
+- ?
