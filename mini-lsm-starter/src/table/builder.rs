@@ -5,9 +5,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
+use bytes::Bytes;
 
 use super::{BlockMeta, SsTable};
-use crate::{block::BlockBuilder, key::KeySlice, lsm_storage::BlockCache};
+use crate::{
+    block::BlockBuilder,
+    key::{Key, KeyBytes, KeySlice},
+    lsm_storage::BlockCache,
+    table::FileObject,
+};
 
 /// Builds an SSTable from key-value pairs.
 pub struct SsTableBuilder {
@@ -22,7 +28,14 @@ pub struct SsTableBuilder {
 impl SsTableBuilder {
     /// Create a builder based on target block size.
     pub fn new(block_size: usize) -> Self {
-        unimplemented!()
+        Self {
+            builder: BlockBuilder::new(block_size),
+            first_key: Vec::new(),
+            last_key: Vec::new(),
+            data: Vec::new(),
+            meta: Vec::new(),
+            block_size,
+        }
     }
 
     /// Adds a key-value pair to SSTable.
@@ -30,7 +43,24 @@ impl SsTableBuilder {
     /// Note: You should split a new block when the current block is full.(`std::mem::replace` may
     /// be helpful here)
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
-        unimplemented!()
+        if self.builder.is_empty() {
+            let _ = self.builder.add(key, value);
+            self.first_key = key.raw_ref().to_vec();
+        } else {
+            let result = self.builder.add(key, value);
+            if !result {
+                let data_block =
+                    std::mem::replace(&mut self.builder, BlockBuilder::new(self.block_size));
+                self.data.append(&mut data_block.build().encode().to_vec());
+                self.meta.push(BlockMeta {
+                    offset: self.data.len(),
+                    first_key: Key::from_bytes(Bytes::copy_from_slice(&self.first_key)),
+                    last_key: Key::from_bytes(Bytes::copy_from_slice(&self.last_key)),
+                });
+                let _ = self.builder.add(key, value);
+            }
+        }
+        self.last_key = key.raw_ref().to_vec();
     }
 
     /// Get the estimated size of the SSTable.
@@ -38,7 +68,7 @@ impl SsTableBuilder {
     /// Since the data blocks contain much more data than meta blocks, just return the size of data
     /// blocks here.
     pub fn estimated_size(&self) -> usize {
-        unimplemented!()
+        self.data.len()
     }
 
     /// Builds the SSTable and writes it to the given path. Use the `FileObject` structure to manipulate the disk objects.
@@ -48,7 +78,48 @@ impl SsTableBuilder {
         block_cache: Option<Arc<BlockCache>>,
         path: impl AsRef<Path>,
     ) -> Result<SsTable> {
-        unimplemented!()
+        // -------------------------------------------------------------------------------------------
+        // |         Block Section         |          Meta Section         |          Extra          |
+        // -------------------------------------------------------------------------------------------
+        // | data block | ... | data block |            metadata           | meta block offset (u32) |
+        // -------------------------------------------------------------------------------------------
+
+        let mut block_meta = self.meta;
+        let mut data_blocks = self.data;
+
+        if !self.builder.is_empty() {
+            let offset = data_blocks.len();
+            data_blocks.append(&mut self.builder.build().encode().to_vec());
+            block_meta.push(BlockMeta {
+                offset,
+                first_key: Key::from_bytes(Bytes::copy_from_slice(&self.first_key)),
+                last_key: Key::from_bytes(Bytes::copy_from_slice(&self.last_key)),
+            });
+        }
+
+        let mut metadata_buf = Vec::new();
+        BlockMeta::encode_block_meta(&block_meta, &mut metadata_buf);
+
+        let block_meta_offset = data_blocks.len();
+
+        let data = [
+            data_blocks,
+            metadata_buf,
+            (block_meta_offset as u32).to_le_bytes().to_vec(),
+        ]
+        .concat();
+
+        Ok(SsTable {
+            file: FileObject::create(path.as_ref(), data)?,
+            block_meta,
+            block_meta_offset,
+            id,
+            block_cache,
+            first_key: KeyBytes::from_bytes(Bytes::copy_from_slice(&self.first_key)),
+            last_key: KeyBytes::from_bytes(Bytes::copy_from_slice(&self.last_key)),
+            bloom: None,
+            max_ts: 0,
+        })
     }
 
     #[cfg(test)]

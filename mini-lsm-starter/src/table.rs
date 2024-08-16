@@ -6,12 +6,13 @@ mod builder;
 mod iterator;
 
 use std::fs::File;
+use std::mem::size_of;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
 pub use builder::SsTableBuilder;
-use bytes::Buf;
+use bytes::{Buf, Bytes};
 pub use iterator::SsTableIterator;
 
 use crate::block::Block;
@@ -34,17 +35,53 @@ impl BlockMeta {
     /// Encode block meta to a buffer.
     /// You may add extra fields to the buffer,
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
-    pub fn encode_block_meta(
-        block_meta: &[BlockMeta],
-        #[allow(clippy::ptr_arg)] // remove this allow after you finish
-        buf: &mut Vec<u8>,
-    ) {
-        unimplemented!()
+    pub fn encode_block_meta(block_meta: &[BlockMeta], buf: &mut Vec<u8>) {
+        // BlockMeta should include the first/last keys in each block and the offsets of each block.
+        // Format: |offset|f_key_len|first_key|l_key_len|last_key|
+        let usize_to_bytes = |x: usize| -> [u8; 8] { (x as u64).to_le_bytes() };
+        buf.append(
+            &mut block_meta
+                .iter()
+                .flat_map(|bm| {
+                    [
+                        usize_to_bytes(bm.offset).as_slice(),
+                        usize_to_bytes(bm.first_key.len()).as_slice(),
+                        bm.first_key.raw_ref(),
+                        usize_to_bytes(bm.last_key.len()).as_slice(),
+                        bm.last_key.raw_ref(),
+                    ]
+                    .concat()
+                })
+                .collect(),
+        );
     }
 
     /// Decode block meta from a buffer.
     pub fn decode_block_meta(buf: impl Buf) -> Vec<BlockMeta> {
-        unimplemented!()
+        let mut buf = buf.chunk();
+        let mut v = Vec::new();
+        let bytes_to_usize = |x: &[u8]| usize::from_le_bytes(x[..8].try_into().unwrap());
+        while buf.has_remaining() {
+            let offset = bytes_to_usize(buf.chunk());
+            buf.advance(8);
+
+            let key_len = bytes_to_usize(buf.chunk());
+            buf.advance(8);
+            let first_key = KeyBytes::from_bytes(Bytes::copy_from_slice(&buf.chunk()[..key_len]));
+            buf.advance(key_len);
+
+            let key_len = bytes_to_usize(buf.chunk());
+            buf.advance(8);
+            let last_key = KeyBytes::from_bytes(Bytes::copy_from_slice(&buf.chunk()[..key_len]));
+            buf.advance(key_len);
+
+            v.push(Self {
+                offset,
+                first_key,
+                last_key,
+            })
+        }
+        v
     }
 }
 
@@ -108,7 +145,36 @@ impl SsTable {
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
-        unimplemented!()
+        let size = file.size();
+        let offset = size - (size_of::<u32>() as u64);
+        let block_meta_offset = file
+            .read(offset, size_of::<u32>() as u64)?
+            .try_into()
+            .map_or(0, u32::from_le_bytes);
+        println!("size: {}, block_meta_offset: {}", size, block_meta_offset);
+        let block_meta = BlockMeta::decode_block_meta(
+            file.read(block_meta_offset as u64, offset - block_meta_offset as u64)?
+                .as_slice(),
+        );
+        let (first_key, last_key) = (
+            block_meta
+                .first()
+                .map_or(KeyBytes::default(), |v| v.first_key.clone()),
+            block_meta
+                .last()
+                .map_or(KeyBytes::default(), |v| v.last_key.clone()),
+        );
+        Ok(Self {
+            file,
+            block_meta,
+            block_meta_offset: block_meta_offset as usize,
+            id,
+            block_cache,
+            first_key,
+            last_key,
+            bloom: None,
+            max_ts: 0,
+        })
     }
 
     /// Create a mock SST with only first key + last key metadata
