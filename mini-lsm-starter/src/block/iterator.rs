@@ -82,6 +82,7 @@ impl BlockIterator {
     /// Note: You should assume the key-value pairs in the block are sorted when being added by
     /// callers.
     pub fn seek_to_key(&mut self, key: KeySlice) {
+        // todo: do binary search
         for (i, offset) in self.block.offsets.iter().enumerate() {
             let start = *offset as usize;
             let data = &self.block.data;

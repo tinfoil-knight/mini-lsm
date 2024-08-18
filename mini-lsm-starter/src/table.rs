@@ -5,12 +5,13 @@ pub(crate) mod bloom;
 mod builder;
 mod iterator;
 
+use std::cmp::min;
 use std::fs::File;
 use std::mem::size_of;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 pub use builder::SsTableBuilder;
 use bytes::{Buf, Bytes};
 pub use iterator::SsTableIterator;
@@ -211,19 +212,29 @@ impl SsTable {
 
     /// Read a block from disk, with block cache. (Day 4)
     pub fn read_block_cached(&self, block_idx: usize) -> Result<Arc<Block>> {
-        unimplemented!()
+        // SEEN
+        match &self.block_cache {
+            Some(cache) => {
+                let blk = cache
+                    .try_get_with((self.id, block_idx), || self.read_block(block_idx))
+                    .map_err(|e| anyhow!("{}", e))?;
+                Ok(blk)
+            }
+            None => self.read_block(block_idx),
+        }
     }
 
     /// Find the block that may contain `key`.
     /// Note: You may want to make use of the `first_key` stored in `BlockMeta`.
     /// You may also assume the key-value pairs stored in each consecutive block are sorted.
     pub fn find_block_idx(&self, key: KeySlice) -> usize {
-        for (i, meta) in self.block_meta.iter().enumerate() {
-            if meta.last_key.as_key_slice() >= key {
-                return i;
-            }
+        match self
+            .block_meta
+            .binary_search_by_key(&key, |metatdata| metatdata.last_key.as_key_slice())
+        {
+            Ok(idx) => idx,
+            Err(idx) => min(idx, self.num_of_blocks() - 1),
         }
-        self.num_of_blocks() - 1
     }
 
     /// Get number of data blocks.
