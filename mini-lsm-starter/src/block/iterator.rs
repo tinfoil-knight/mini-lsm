@@ -41,7 +41,7 @@ impl BlockIterator {
 
     /// Creates a block iterator and seek to the first key that >= `key`.
     pub fn create_and_seek_to_key(block: Arc<Block>, key: KeySlice) -> Self {
-        let mut itr = Self::new(block);
+        let mut itr = Self::create_and_seek_to_first(block);
         itr.seek_to_key(key);
         itr
     }
@@ -60,13 +60,13 @@ impl BlockIterator {
     /// Returns true if the iterator is valid.
     /// Note: You may want to make use of `key`
     pub fn is_valid(&self) -> bool {
-        self.key.is_empty()
+        !self.key.is_empty()
     }
 
     /// Seeks to the first key in the block.
     pub fn seek_to_first(&mut self) {
-        self.first_key.clear();
         self.seek_to_idx(0);
+        self.first_key = self.key().to_key_vec();
     }
 
     /// Move to the next key in the block.
@@ -87,8 +87,8 @@ impl BlockIterator {
             let data = &self.block.data;
             let key_len = u16::from_le_bytes([data[start], data[start + 1]]);
             let end = start + 2 + key_len as usize;
-            let key_from_data = Key::from_slice(&data[start + 2..end]);
-            if key_from_data >= key {
+
+            if Key::from_slice(&data[start + 2..end]) >= key {
                 self.seek_to_idx(i);
                 return;
             }
@@ -109,13 +109,8 @@ impl BlockIterator {
 
         let value_len = u16::from_le_bytes([data[end], data[end + 1]]);
         let start = end + 2;
-        self.value_range = (start, start + value_len as usize);
 
-        if self.first_key.is_empty() {
-            self.first_key = KeyVec::from_vec(key.to_vec());
-            self.idx = 0;
-        } else {
-            self.idx += 1
-        }
+        self.value_range = (start, start + value_len as usize);
+        self.idx = idx;
     }
 }

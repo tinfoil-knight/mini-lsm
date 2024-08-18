@@ -10,7 +10,7 @@ use bytes::Bytes;
 use super::{BlockMeta, SsTable};
 use crate::{
     block::BlockBuilder,
-    key::{Key, KeyBytes, KeySlice},
+    key::{Key, KeySlice},
     lsm_storage::BlockCache,
     table::FileObject,
 };
@@ -51,13 +51,14 @@ impl SsTableBuilder {
             if !result {
                 let data_block =
                     std::mem::replace(&mut self.builder, BlockBuilder::new(self.block_size));
-                self.data.append(&mut data_block.build().encode().to_vec());
                 self.meta.push(BlockMeta {
                     offset: self.data.len(),
                     first_key: Key::from_bytes(Bytes::copy_from_slice(&self.first_key)),
                     last_key: Key::from_bytes(Bytes::copy_from_slice(&self.last_key)),
                 });
+                self.data.append(&mut data_block.build().encode().to_vec());
                 let _ = self.builder.add(key, value);
+                self.first_key = key.raw_ref().to_vec();
             }
         }
         self.last_key = key.raw_ref().to_vec();
@@ -109,14 +110,19 @@ impl SsTableBuilder {
         ]
         .concat();
 
+        let (first_key, last_key) = (
+            block_meta.first().unwrap().first_key.clone(),
+            block_meta.last().unwrap().last_key.clone(),
+        );
+
         Ok(SsTable {
             file: FileObject::create(path.as_ref(), data)?,
             block_meta,
             block_meta_offset,
             id,
             block_cache,
-            first_key: KeyBytes::from_bytes(Bytes::copy_from_slice(&self.first_key)),
-            last_key: KeyBytes::from_bytes(Bytes::copy_from_slice(&self.last_key)),
+            first_key,
+            last_key,
             bloom: None,
             max_ts: 0,
         })
