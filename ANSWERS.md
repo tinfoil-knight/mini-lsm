@@ -70,12 +70,23 @@
 - where m -> no. of blocks ; n -> no. of keys in the block
 * Where does the cursor stop when you seek a non-existent key in your implementation?
 * Is it possible (or necessary) to do in-place updates of SST files?
+- In-place updates can be used to compact an SST file. It it possible to do so.
 * An SST is usually large (i.e., 256MB). In this case, the cost of copying/expanding the `Vec` would be significant. Does your implementation allocate enough space for your SST builder in advance? How did you implement it?
 * Looking at the `moka` block cache, why does it return `Arc<Error>` instead of the original `Error`?
 * Does the usage of a block cache guarantee that there will be at most a fixed number of blocks in memory? For example, if you have a `moka` block cache of 4GB and block size of 4KB, will there be more than 4GB/4KB number of blocks in memory at the same time?
 - The moka-rs library should evict additional items over the fixed limit.
 * Is it possible to store columnar data (i.e., a table of 100 integer columns) in an LSM engine? Is the current SST format still a good choice?
 - Its possible to store columnar data in an LSM engine.
-- ?
+- For storage, data can be split into groups. For eg. col1 for 1-100, col2 for 1-100, ...
 * Consider the case that the LSM engine is built on object store services (i.e., S3). How would you optimize/change the SST format/parameters and the block cache to make it suitable for such services?
 * For now, we load the index of all SSTs into the memory. Assume you have a 16GB memory reserved for the indexes, can you estimate the maximum size of the database your LSM system can support? (That's why you need an index cache!)
+1,2,3,4,5,.....,col1,size
+## DAY 5
+* Consider the case that a user has an iterator that iterates the whole storage engine, and the storage engine is 1TB large, so that it takes ~1 hour to scan all the data.
+  What would be the problems if the user does so? (This is a good question and we will ask it several times at different points of the tutorial...)
+- User might get stale data if there are updates of exisiting keys after the iteration has started.
+- Might interfere with compaction.
+* Another popular interface provided by some LSM-tree storage engines is multi-get (or vectored get). The user can pass a list of keys that they want to retrieve.
+  The interface returns the value of each of the key. For example, `multi_get(vec!["a", "b", "c", "d"]) -> a=1,b=2,c=3,d=4`. Obviously, an easy implementation is to simply doing a single get for each of the key.
+  How will you implement the multi-get interface, and what optimizations you can do to make it more efficient? (Hint: some operations during the get process will only need to be done once for all keys, and besides that, you can think of an improved disk I/O interface to better support this multi-get interface).
+- Keep a map of keys that haven't resolved to a value or "deleted" yet and check each iterator item you come across for the key.

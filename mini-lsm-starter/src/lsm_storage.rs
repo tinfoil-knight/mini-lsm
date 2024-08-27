@@ -283,10 +283,23 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        let state = self.state.read();
+        let snapshot = {
+            let guard = self.state.read();
+            Arc::clone(&guard)
+        };
 
-        for memtable in std::iter::once(&state.memtable).chain(state.imm_memtables.iter()) {
+        for memtable in std::iter::once(&snapshot.memtable).chain(snapshot.imm_memtables.iter()) {
             if let Some(v) = memtable.get(key) {
+                return Ok(if Bytes::is_empty(&v) { None } else { Some(v) });
+            }
+        }
+
+        for table_id in snapshot.l0_sstables.iter() {
+            let table = snapshot.sstables[table_id].clone();
+
+            let iter = SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(key))?;
+            if iter.is_valid() && iter.key().raw_ref() == key {
+                let v = Bytes::copy_from_slice(iter.value());
                 return Ok(if Bytes::is_empty(&v) { None } else { Some(v) });
             }
         }
