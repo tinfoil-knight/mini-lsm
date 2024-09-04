@@ -158,7 +158,24 @@ impl Drop for MiniLsm {
 
 impl MiniLsm {
     pub fn close(&self) -> Result<()> {
-        unimplemented!()
+        // SEEN 1.6T2
+        self.flush_notifier.send(()).ok();
+
+        let mut flush_thread = self.flush_thread.lock();
+        if let Some(flush_thread) = flush_thread.take() {
+            flush_thread
+                .join()
+                .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        }
+
+        while {
+            let snapshot = self.inner.state.read();
+            !snapshot.imm_memtables.is_empty()
+        } {
+            self.inner.force_flush_next_imm_memtable()?;
+        }
+
+        Ok(())
     }
 
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
@@ -372,13 +389,13 @@ impl LsmStorageInner {
     /// Force flush the earliest-created immutable memtable to disk
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
         let _state_lock = self.state_lock.lock();
-        let mut guard = self.state.write();
-        let mut snapshot = guard.as_ref().clone();
 
-        let earliest_memtable = match snapshot.imm_memtables.pop() {
-            Some(memtable) => memtable,
-            None => return Ok(()),
-        };
+        let earliest_memtable;
+        {
+            let guard = self.state.read();
+            earliest_memtable = guard.imm_memtables.last().unwrap().clone();
+        }
+
         let mut builder = SsTableBuilder::new(self.options.block_size);
         earliest_memtable.flush(&mut builder)?;
 
@@ -387,8 +404,13 @@ impl LsmStorageInner {
             Some(self.block_cache.clone()),
             self.path_of_sst(earliest_memtable.id()),
         )?;
+
+        let mut guard = self.state.write();
+        let mut snapshot = guard.as_ref().clone();
+
         snapshot.l0_sstables.insert(0, sst.sst_id());
         snapshot.sstables.insert(sst.sst_id(), Arc::new(sst));
+        snapshot.imm_memtables.pop();
 
         *guard = Arc::new(snapshot);
 
