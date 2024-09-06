@@ -441,7 +441,15 @@ impl LsmStorageInner {
         let mut sst_iters = Vec::new();
         for table_id in snapshot.l0_sstables.iter() {
             // SEEN : Didn't consider the lower bound
-            let table = snapshot.sstables[table_id].clone();
+            let table = Arc::clone(&snapshot.sstables[table_id]);
+
+            let ignore_table = !Self::key_within(table.first_key().raw_ref(), lower, upper)
+                && !Self::key_within(table.last_key().raw_ref(), lower, upper);
+
+            if ignore_table {
+                continue;
+            }
+
             let iter = match lower {
                 Bound::Included(key) => {
                     SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(key))?
@@ -468,5 +476,20 @@ impl LsmStorageInner {
             map_bound(upper),
         )?;
         Ok(FusedIterator::new(lsm_itr))
+    }
+
+    pub fn key_within(key: &[u8], lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> bool {
+        let l = match lower {
+            Bound::Included(k) => key >= k,
+            Bound::Excluded(k) => key > k,
+            Bound::Unbounded => true,
+        };
+        let u = match upper {
+            Bound::Included(k) => key <= k,
+            Bound::Excluded(k) => key < k,
+            Bound::Unbounded => true,
+        };
+
+        l && u
     }
 }
