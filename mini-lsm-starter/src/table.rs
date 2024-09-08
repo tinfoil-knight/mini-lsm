@@ -146,16 +146,37 @@ impl SsTable {
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
-        let size = file.size();
-        let offset = size - (size_of::<u32>() as u64);
-        let block_meta_offset = file
+        // -----------------------------------------------------------------------------------------------------
+        // |         Block Section         |                            Meta Section                           |
+        // -----------------------------------------------------------------------------------------------------
+        // | data block | ... | data block | metadata | meta block offset | bloom filter | bloom filter offset |
+        // |                               |  varlen  |         u32       |    varlen    |        u32          |
+        // -----------------------------------------------------------------------------------------------------
+
+        let offset = file.size() - size_of::<u32>() as u64;
+        let bloom_offset = file
             .read(offset, size_of::<u32>() as u64)?
             .try_into()
             .map_or(0, u32::from_le_bytes);
+        let bloom_len = offset - bloom_offset as u64;
+
+        let bloom = Bloom::decode(file.read(bloom_offset as u64, bloom_len)?.as_slice());
+
+        let block_meta_offset = file
+            .read(
+                bloom_offset as u64 - size_of::<u32>() as u64,
+                size_of::<u32>() as u64,
+            )?
+            .try_into()
+            .map_or(0, u32::from_le_bytes);
+        let block_meta_len =
+            bloom_offset as u64 - size_of::<u32>() as u64 - block_meta_offset as u64;
+
         let block_meta = BlockMeta::decode_block_meta(
-            file.read(block_meta_offset as u64, offset - block_meta_offset as u64)?
+            file.read(block_meta_offset as u64, block_meta_len)?
                 .as_slice(),
         );
+
         let (first_key, last_key) = (
             block_meta
                 .first()
@@ -172,7 +193,7 @@ impl SsTable {
             block_cache,
             first_key,
             last_key,
-            bloom: None,
+            bloom: bloom.ok(),
             max_ts: 0,
         })
     }

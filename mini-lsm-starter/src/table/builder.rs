@@ -1,13 +1,13 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use std::path::Path;
 use std::sync::Arc;
+use std::{mem::size_of, path::Path};
 
 use anyhow::Result;
 use bytes::Bytes;
 
-use super::{BlockMeta, SsTable};
+use super::{bloom::Bloom, BlockMeta, SsTable};
 use crate::{
     block::BlockBuilder,
     key::{Key, KeySlice},
@@ -22,6 +22,7 @@ pub struct SsTableBuilder {
     last_key: Vec<u8>,
     data: Vec<u8>,
     pub(crate) meta: Vec<BlockMeta>,
+    keys: Vec<u32>,
     block_size: usize,
 }
 
@@ -34,6 +35,7 @@ impl SsTableBuilder {
             last_key: Vec::new(),
             data: Vec::new(),
             meta: Vec::new(),
+            keys: Vec::new(),
             block_size,
         }
     }
@@ -43,6 +45,8 @@ impl SsTableBuilder {
     /// Note: You should split a new block when the current block is full.(`std::mem::replace` may
     /// be helpful here)
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
+        self.keys.push(farmhash::fingerprint32(key.raw_ref()));
+
         if self.builder.is_empty() {
             let _ = self.builder.add(key, value);
             self.first_key = key.raw_ref().to_vec();
@@ -79,11 +83,12 @@ impl SsTableBuilder {
         block_cache: Option<Arc<BlockCache>>,
         path: impl AsRef<Path>,
     ) -> Result<SsTable> {
-        // -------------------------------------------------------------------------------------------
-        // |         Block Section         |          Meta Section         |          Extra          |
-        // -------------------------------------------------------------------------------------------
-        // | data block | ... | data block |            metadata           | meta block offset (u32) |
-        // -------------------------------------------------------------------------------------------
+        // -----------------------------------------------------------------------------------------------------
+        // |         Block Section         |                            Meta Section                           |
+        // -----------------------------------------------------------------------------------------------------
+        // | data block | ... | data block | metadata | meta block offset | bloom filter | bloom filter offset |
+        // |                               |  varlen  |         u32       |    varlen    |        u32          |
+        // -----------------------------------------------------------------------------------------------------
 
         let mut block_meta = self.meta;
         let mut data_blocks = self.data;
@@ -97,16 +102,23 @@ impl SsTableBuilder {
                 last_key: Key::from_bytes(Bytes::copy_from_slice(&self.last_key)),
             });
         }
-
         let mut metadata_buf = Vec::new();
         BlockMeta::encode_block_meta(&block_meta, &mut metadata_buf);
 
         let block_meta_offset = data_blocks.len();
 
+        let bits_per_key = Bloom::bloom_bits_per_key(self.keys.len(), 0.01);
+        let bloom = Bloom::build_from_key_hashes(&self.keys, bits_per_key);
+        let mut bloom_buf: Vec<u8> = Vec::new();
+        bloom.encode(&mut bloom_buf);
+        let bloom_offset = block_meta_offset + metadata_buf.len() + size_of::<u32>();
+
         let data = [
             data_blocks,
             metadata_buf,
             (block_meta_offset as u32).to_le_bytes().to_vec(),
+            bloom_buf,
+            (bloom_offset as u32).to_le_bytes().to_vec(),
         ]
         .concat();
 
@@ -123,7 +135,7 @@ impl SsTableBuilder {
             block_cache,
             first_key,
             last_key,
-            bloom: None,
+            bloom: Some(bloom),
             max_ts: 0,
         })
     }

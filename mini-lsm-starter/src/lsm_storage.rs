@@ -312,7 +312,15 @@ impl LsmStorageInner {
         }
 
         for table_id in snapshot.l0_sstables.iter() {
-            let table = snapshot.sstables[table_id].clone();
+            let table = Arc::clone(&snapshot.sstables[table_id]);
+
+            if !table
+                .bloom
+                .as_ref()
+                .map_or(true, |f| f.may_contain(farmhash::fingerprint32(key)))
+            {
+                continue;
+            }
 
             let iter = SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(key))?;
             if iter.is_valid() && iter.key().raw_ref() == key {
