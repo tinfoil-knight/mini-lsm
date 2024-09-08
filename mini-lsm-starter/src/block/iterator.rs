@@ -88,8 +88,14 @@ impl BlockIterator {
             let data = &self.block.data;
             let key_len = u16::from_le_bytes([data[start], data[start + 1]]);
             let end = start + 2 + key_len as usize;
+            let mut k = &data[start + 2..end];
+            let decoded_key;
+            if i != 0 {
+                decoded_key = self.decode_key(k);
+                k = decoded_key.raw_ref();
+            }
 
-            if Key::from_slice(&data[start + 2..end]) >= key {
+            if Key::from_slice(k) >= key {
                 self.seek_to_idx(i);
                 return;
             }
@@ -105,13 +111,36 @@ impl BlockIterator {
 
         let key_len = u16::from_le_bytes([data[start], data[start + 1]]);
         let end = start + 2 + key_len as usize;
-        let key = &data[start + 2..end];
-        self.key.set_from_slice(KeySlice::from_slice(key));
+        let mut key = &data[start + 2..end];
+
+        let decoded_key;
+        if idx != 0 {
+            decoded_key = self.decode_key(key);
+            key = decoded_key.raw_ref();
+        }
 
         let value_len = u16::from_le_bytes([data[end], data[end + 1]]);
         let start = end + 2;
 
+        self.key = KeyVec::from_vec(key.to_vec());
         self.value_range = (start, start + value_len as usize);
         self.idx = idx;
+    }
+
+    fn decode_key(&self, key: &[u8]) -> KeyVec {
+        // Prefix Encoding w/ the First Key
+        // key_overlap_len (u16) | rest_key_len (u16) | key (rest_key_len)
+
+        let key_overlap_len = u16::from_le_bytes([key[0], key[1]]);
+        let rest_key_len = u16::from_le_bytes([key[2], key[3]]);
+        let rest_key = &key[4..];
+
+        let decoded_key = [
+            &self.first_key.raw_ref()[0..key_overlap_len as usize],
+            rest_key,
+        ]
+        .concat();
+
+        KeyVec::from_vec(decoded_key)
     }
 }

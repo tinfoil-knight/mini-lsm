@@ -14,6 +14,17 @@ pub struct BlockBuilder {
     first_key: KeyVec,
 }
 
+fn find_overlap(a: &[u8], b: &[u8]) -> u16 {
+    let mut cnt = 0;
+    for (i, bit) in a.iter().enumerate() {
+        if i >= b.len() || &b[i] != bit {
+            break;
+        }
+        cnt += 1
+    }
+    cnt
+}
+
 impl BlockBuilder {
     /// Creates a new block builder.
     pub fn new(block_size: usize) -> Self {
@@ -28,15 +39,33 @@ impl BlockBuilder {
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
+        let is_first = self.is_empty();
+
+        let key = if is_first {
+            key.raw_ref().to_vec()
+        } else {
+            // Prefix Encoding w/ the First Key
+            // key_overlap_len (u16) | rest_key_len (u16) | key (rest_key_len)
+            let key_overlap_len = find_overlap(key.raw_ref(), self.first_key.raw_ref());
+            let rest_key_len = key.raw_ref().len() as u16 - key_overlap_len;
+            let prefix_encoded_key = [
+                &key_overlap_len.to_le_bytes(),
+                &rest_key_len.to_le_bytes(),
+                &key.raw_ref()[key_overlap_len as usize..],
+            ]
+            .concat();
+            prefix_encoded_key
+        };
+
         let (key_len, value_len) = (key.len(), value.len());
         let current_block_size = self.data.len();
         let increase = 2 + key_len + 2 + value_len + 2;
         let expected_block_size = current_block_size + increase + (self.offsets.len() + 1) * 2 + 2;
 
-        let is_first = self.is_empty();
         if expected_block_size > self.block_size && !is_first {
             return false;
         }
+
         self.offsets.push(if is_first {
             0
         } else {
@@ -44,14 +73,14 @@ impl BlockBuilder {
         });
         let pair = [
             &(key_len as u16).to_le_bytes(),
-            key.into_inner(),
+            key.as_slice(),
             &(value_len as u16).to_le_bytes(),
             value,
         ]
         .concat();
         self.data.extend(pair);
         if is_first {
-            self.first_key = KeyVec::from_vec(key.into_inner().to_vec());
+            self.first_key = KeyVec::from_vec(key);
         }
         true
     }
