@@ -339,6 +339,8 @@ impl LsmStorageInner {
 
     /// Put a key-value pair into the storage by writing into the current memtable.
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        assert!(!key.is_empty(), "key cannot be empty");
+
         let state = self.state.read();
         state.memtable.put(key, value)?;
 
@@ -441,7 +443,7 @@ impl LsmStorageInner {
             Arc::clone(&guard)
         };
 
-        let mut memtable_iters = Vec::new();
+        let mut memtable_iters = Vec::with_capacity(1 + snapshot.imm_memtables.len());
         memtable_iters.push(Box::new(snapshot.memtable.scan(lower, upper)));
         for memtable in &snapshot.imm_memtables {
             memtable_iters.push(Box::new(memtable.scan(lower, upper)))

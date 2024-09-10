@@ -1,4 +1,7 @@
-use crate::key::{KeySlice, KeyVec};
+use crate::{
+    block::SIZEOF_U16,
+    key::{KeySlice, KeyVec},
+};
 
 use super::Block;
 
@@ -39,6 +42,8 @@ impl BlockBuilder {
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
+        assert!(!key.is_empty(), "key must not be empty");
+
         let is_first = self.is_empty();
 
         let key = if is_first {
@@ -59,26 +64,23 @@ impl BlockBuilder {
 
         let (key_len, value_len) = (key.len(), value.len());
         let current_block_size = self.data.len();
-        let increase = 2 + key_len + 2 + value_len + 2;
+        let increase = key_len + value_len + SIZEOF_U16 * 3; // key_len, value_len and offset
         let expected_block_size = current_block_size + increase + (self.offsets.len() + 1) * 2 + 2;
 
         if expected_block_size > self.block_size && !is_first {
             return false;
         }
 
-        self.offsets.push(if is_first {
-            0
-        } else {
-            current_block_size as u16
-        });
-        let pair = [
-            &(key_len as u16).to_le_bytes(),
-            key.as_slice(),
-            &(value_len as u16).to_le_bytes(),
-            value,
-        ]
-        .concat();
-        self.data.extend(pair);
+        self.offsets.push(current_block_size as u16);
+        self.data.extend(
+            [
+                &(key_len as u16).to_le_bytes(),
+                key.as_slice(),
+                &(value_len as u16).to_le_bytes(),
+                value,
+            ]
+            .concat(),
+        );
         if is_first {
             self.first_key = KeyVec::from_vec(key);
         }
@@ -92,6 +94,9 @@ impl BlockBuilder {
 
     /// Finalize the block.
     pub fn build(self) -> Block {
+        if self.is_empty() {
+            panic!("block should not be empty");
+        }
         Block {
             data: self.data,
             offsets: self.offsets,

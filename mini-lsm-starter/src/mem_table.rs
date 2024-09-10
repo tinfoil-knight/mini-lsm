@@ -1,5 +1,3 @@
-#![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
-
 use std::ops::Bound;
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
@@ -111,7 +109,7 @@ impl MemTable {
             |map| map.range((map_bound(lower), map_bound(upper))),
             (Bytes::new(), Bytes::new()),
         );
-        let _ = itr.next();
+        itr.next().unwrap();
         itr
     }
 
@@ -174,11 +172,12 @@ impl StorageIterator for MemTableIterator {
 
     fn next(&mut self) -> Result<()> {
         self.with_mut(|fields| {
-            if let Some(v) = fields.iter.next() {
-                *fields.item = (v.key().clone(), v.value().clone());
-            } else {
-                *fields.item = (Bytes::new(), Bytes::new())
-            }
+            *fields.item = fields
+                .iter
+                .next()
+                .map_or((Bytes::from_static(&[]), Bytes::from_static(&[])), |v| {
+                    (v.key().clone(), v.value().clone())
+                })
         });
         Ok(())
     }

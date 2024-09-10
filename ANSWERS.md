@@ -5,7 +5,7 @@
     - Putting an empty byte-array is equivalent to a `delete` operation for the parent Lsm structure. That's why a `delete` API isn't needed.
 * Is it possible to use other data structures as the memtable in LSM? What are the pros/cons of using the skiplist?
     - Yes. Any data structure that supports setting and getting key-value is sufficient.
-      - It being ordered isn't necessary if a sequential scan operation isn't needed.
+      - It being ordered isn't necessary since a sequential scan operation isn't needed.
     - Difficult to use contiguous memory in Skiplists compared to BTree.
     - Skiplists are probabilistic in nature and might get unbalanced with time.
     - Skiplists are faster than BTree for in-memory workloads.

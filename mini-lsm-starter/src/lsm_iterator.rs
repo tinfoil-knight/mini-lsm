@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::ops::Bound;
 
 use anyhow::{anyhow, Result};
@@ -107,23 +104,19 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
     type KeyType<'a> = I::KeyType<'a> where Self: 'a;
 
     fn is_valid(&self) -> bool {
-        if self.has_errored {
-            false
-        } else {
-            self.iter.is_valid()
-        }
+        !self.has_errored && self.iter.is_valid()
     }
 
     fn key(&self) -> Self::KeyType<'_> {
-        if self.has_errored {
-            panic!("iterator has errored")
+        if !self.is_valid() {
+            panic!("invalid access to the underlying iterator");
         }
         self.iter.key()
     }
 
     fn value(&self) -> &[u8] {
-        if self.has_errored {
-            panic!("iterator has errored")
+        if !self.is_valid() {
+            panic!("invalid access to the underlying iterator");
         }
         self.iter.value()
     }
@@ -131,7 +124,7 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
     fn next(&mut self) -> Result<()> {
         if self.has_errored {
             Err(anyhow!("iterator has already errored"))
-        } else if self.is_valid() {
+        } else if self.iter.is_valid() {
             let result = self.iter.next();
             if result.is_err() {
                 self.has_errored = true

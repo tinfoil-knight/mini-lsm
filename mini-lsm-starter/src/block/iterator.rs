@@ -1,11 +1,8 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::sync::Arc;
 
-use crate::key::{Key, KeySlice, KeyVec};
+use crate::key::{KeySlice, KeyVec};
 
-use super::Block;
+use super::{Block, SIZEOF_U16};
 
 /// Iterates on a block.
 pub struct BlockIterator {
@@ -71,10 +68,6 @@ impl BlockIterator {
 
     /// Move to the next key in the block.
     pub fn next(&mut self) {
-        if self.idx + 1 >= self.block.offsets.len() {
-            self.key.clear();
-            return;
-        }
         self.seek_to_idx(self.idx + 1);
     }
 
@@ -82,36 +75,37 @@ impl BlockIterator {
     /// Note: You should assume the key-value pairs in the block are sorted when being added by
     /// callers.
     pub fn seek_to_key(&mut self, key: KeySlice) {
-        // todo: do binary search
-        for (i, offset) in self.block.offsets.iter().enumerate() {
-            let start = *offset as usize;
-            let data = &self.block.data;
-            let key_len = u16::from_le_bytes([data[start], data[start + 1]]);
-            let end = start + 2 + key_len as usize;
-            let mut k = &data[start + 2..end];
-            let decoded_key;
-            if i != 0 {
-                decoded_key = self.decode_key(k);
-                k = decoded_key.raw_ref();
-            }
+        let mut low = 0;
+        let mut high = self.block.offsets.len();
 
-            if Key::from_slice(k) >= key {
-                self.seek_to_idx(i);
-                return;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            self.seek_to_idx(mid);
+            assert!(self.is_valid());
+
+            match self.key().cmp(&key) {
+                std::cmp::Ordering::Less => low = mid + 1,
+                std::cmp::Ordering::Greater => high = mid,
+                std::cmp::Ordering::Equal => return,
             }
         }
-
-        self.key.clear()
+        self.seek_to_idx(low);
     }
 
     fn seek_to_idx(&mut self, idx: usize) {
+        if idx >= self.block.offsets.len() {
+            self.key.clear();
+            self.value_range = (0, 0);
+            return;
+        }
+
         let block = &self.block;
         let start = block.offsets[idx] as usize;
         let data = &block.data;
 
         let key_len = u16::from_le_bytes([data[start], data[start + 1]]);
-        let end = start + 2 + key_len as usize;
-        let mut key = &data[start + 2..end];
+        let end = start + SIZEOF_U16 + key_len as usize;
+        let mut key = &data[start + SIZEOF_U16..end];
 
         let decoded_key;
         if idx != 0 {
@@ -120,7 +114,7 @@ impl BlockIterator {
         }
 
         let value_len = u16::from_le_bytes([data[end], data[end + 1]]);
-        let start = end + 2;
+        let start = end + SIZEOF_U16;
 
         self.key = KeyVec::from_vec(key.to_vec());
         self.value_range = (start, start + value_len as usize);
@@ -132,7 +126,6 @@ impl BlockIterator {
         // key_overlap_len (u16) | rest_key_len (u16) | key (rest_key_len)
 
         let key_overlap_len = u16::from_le_bytes([key[0], key[1]]);
-        let rest_key_len = u16::from_le_bytes([key[2], key[3]]);
         let rest_key = &key[4..];
 
         let decoded_key = [

@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::cmp::{self};
 use std::collections::binary_heap::PeekMut;
 use std::collections::BinaryHeap;
@@ -50,8 +47,10 @@ impl<I: StorageIterator> MergeIterator<I> {
             .into_iter()
             .filter(|x| x.is_valid())
             .enumerate()
-            .map(|f| HeapWrapper(f.0, f.1))
+            .map(|(idx, itr)| HeapWrapper(idx, itr))
             .collect();
+
+        // NOTE: Reference solution assigns last iterator as current if all iterators are invalid.
 
         let current = heap.pop();
         Self {
@@ -92,6 +91,10 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
         // Skip duplicate key
         while let Some(mut iter) = self.iters.peek_mut() {
             if iter.1.key() == current.1.key() {
+                // If next returns an error (i.e., due to disk failure, network failure, checksum error, etc.),
+                // it is no longer valid. However, when we go out of the if condition and return the error to the caller,
+                // PeekMut's drop will try move the element within the heap, which causes an access to an invalid iterator.
+                // Therefore, you will need to do all error handling by yourself instead of using ? within the scope of PeekMut.
                 if let e @ Err(_) = iter.1.next() {
                     PeekMut::pop(iter);
                     return e;
@@ -103,7 +106,7 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
             } else {
                 break;
             }
-        }
+        } // When the PeekMut reference gets dropped, the binary heap gets reordered automatically.
 
         current.1.next()?;
 
