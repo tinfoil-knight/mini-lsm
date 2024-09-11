@@ -307,7 +307,7 @@ impl LsmStorageInner {
 
         for memtable in std::iter::once(&snapshot.memtable).chain(snapshot.imm_memtables.iter()) {
             if let Some(v) = memtable.get(key) {
-                return Ok(if Bytes::is_empty(&v) { None } else { Some(v) });
+                return Ok(if v.is_empty() { None } else { Some(v) });
             }
         }
 
@@ -325,9 +325,11 @@ impl LsmStorageInner {
             let iter = SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(key))?;
             if iter.is_valid() && iter.key().raw_ref() == key {
                 let v = Bytes::copy_from_slice(iter.value());
-                return Ok(if Bytes::is_empty(&v) { None } else { Some(v) });
+                return Ok(if v.is_empty() { None } else { Some(v) });
             }
         }
+
+        // note: we don't check the l1+ sstables since we don't write to them yet
 
         Ok(None)
     }
@@ -477,6 +479,8 @@ impl LsmStorageInner {
 
             sst_iters.push(Box::new(iter));
         }
+
+        // note: we don't use the l1+ sstables since we don't write to them yet
 
         let lsm_itr = LsmIterator::new(
             TwoMergeIterator::create(

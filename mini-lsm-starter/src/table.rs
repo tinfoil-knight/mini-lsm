@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 pub(crate) mod bloom;
 mod builder;
 mod iterator;
@@ -13,7 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 pub use builder::SsTableBuilder;
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes};
 pub use iterator::SsTableIterator;
 
 use crate::block::Block;
@@ -40,21 +37,13 @@ impl BlockMeta {
         // BlockMeta should include the first/last keys in each block and the offsets of each block.
         // Format: |offset|f_key_len|first_key|l_key_len|last_key|
         let usize_to_bytes = |x: usize| -> [u8; 8] { (x as u64).to_le_bytes() };
-        buf.append(
-            &mut block_meta
-                .iter()
-                .flat_map(|bm| {
-                    [
-                        usize_to_bytes(bm.offset).as_slice(),
-                        usize_to_bytes(bm.first_key.len()).as_slice(),
-                        bm.first_key.raw_ref(),
-                        usize_to_bytes(bm.last_key.len()).as_slice(),
-                        bm.last_key.raw_ref(),
-                    ]
-                    .concat()
-                })
-                .collect(),
-        );
+        for meta in block_meta {
+            buf.put(usize_to_bytes(meta.offset).as_slice());
+            buf.put(usize_to_bytes(meta.first_key.len()).as_slice());
+            buf.put(meta.first_key.raw_ref());
+            buf.put(usize_to_bytes(meta.last_key.len()).as_slice());
+            buf.put(meta.last_key.raw_ref())
+        }
     }
 
     /// Decode block meta from a buffer.
@@ -160,7 +149,7 @@ impl SsTable {
             .map_or(0, u32::from_le_bytes);
         let bloom_len = offset - bloom_offset as u64;
 
-        let bloom = Bloom::decode(file.read(bloom_offset as u64, bloom_len)?.as_slice());
+        let bloom = Bloom::decode(file.read(bloom_offset as u64, bloom_len)?.as_slice())?;
 
         let block_meta_offset = file
             .read(
@@ -177,23 +166,15 @@ impl SsTable {
                 .as_slice(),
         );
 
-        let (first_key, last_key) = (
-            block_meta
-                .first()
-                .map_or(KeyBytes::default(), |v| v.first_key.clone()),
-            block_meta
-                .last()
-                .map_or(KeyBytes::default(), |v| v.last_key.clone()),
-        );
         Ok(Self {
             file,
+            first_key: block_meta.first().unwrap().first_key.clone(),
+            last_key: block_meta.last().unwrap().last_key.clone(),
             block_meta,
             block_meta_offset: block_meta_offset as usize,
             id,
             block_cache,
-            first_key,
-            last_key,
-            bloom: bloom.ok(),
+            bloom: Some(bloom),
             max_ts: 0,
         })
     }
@@ -227,8 +208,7 @@ impl SsTable {
             .map_or(self.block_meta_offset, |v| v.offset)
             - metadata.offset;
         let data = self.file.read(metadata.offset as u64, len as u64)?;
-        let block = Arc::new(Block::decode(&data));
-        Ok(block)
+        Ok(Arc::new(Block::decode(&data)))
     }
 
     /// Read a block from disk, with block cache. (Day 4)

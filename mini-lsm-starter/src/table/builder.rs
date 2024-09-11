@@ -1,11 +1,8 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
+use std::path::Path;
 use std::sync::Arc;
-use std::{mem::size_of, path::Path};
 
 use anyhow::Result;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes};
 
 use super::{bloom::Bloom, BlockMeta, SsTable};
 use crate::{
@@ -22,7 +19,7 @@ pub struct SsTableBuilder {
     last_key: Vec<u8>,
     data: Vec<u8>,
     pub(crate) meta: Vec<BlockMeta>,
-    keys: Vec<u32>,
+    key_hashes: Vec<u32>,
     block_size: usize,
 }
 
@@ -35,7 +32,7 @@ impl SsTableBuilder {
             last_key: Vec::new(),
             data: Vec::new(),
             meta: Vec::new(),
-            keys: Vec::new(),
+            key_hashes: Vec::new(),
             block_size,
         }
     }
@@ -45,26 +42,21 @@ impl SsTableBuilder {
     /// Note: You should split a new block when the current block is full.(`std::mem::replace` may
     /// be helpful here)
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
-        self.keys.push(farmhash::fingerprint32(key.raw_ref()));
+        self.key_hashes.push(farmhash::fingerprint32(key.raw_ref()));
 
-        if self.builder.is_empty() {
-            let _ = self.builder.add(key, value);
+        if self.first_key.is_empty() {
             self.first_key = key.raw_ref().to_vec();
-        } else {
-            let result = self.builder.add(key, value);
-            if !result {
-                let data_block =
-                    std::mem::replace(&mut self.builder, BlockBuilder::new(self.block_size));
-                self.meta.push(BlockMeta {
-                    offset: self.data.len(),
-                    first_key: Key::from_bytes(Bytes::copy_from_slice(&self.first_key)),
-                    last_key: Key::from_bytes(Bytes::copy_from_slice(&self.last_key)),
-                });
-                self.data.append(&mut data_block.build().encode().to_vec());
-                let _ = self.builder.add(key, value);
-                self.first_key = key.raw_ref().to_vec();
-            }
         }
+
+        if self.builder.add(key, value) {
+            self.last_key = key.raw_ref().to_vec();
+            return;
+        }
+
+        self.finish_block();
+
+        assert!(self.builder.add(key, value));
+        self.first_key = key.raw_ref().to_vec();
         self.last_key = key.raw_ref().to_vec();
     }
 
@@ -76,9 +68,20 @@ impl SsTableBuilder {
         self.data.len()
     }
 
+    fn finish_block(&mut self) {
+        let builder = std::mem::replace(&mut self.builder, BlockBuilder::new(self.block_size));
+        let encoded_block = builder.build().encode();
+        self.meta.push(BlockMeta {
+            offset: self.data.len(),
+            first_key: Key::from_bytes(Bytes::copy_from_slice(&self.first_key)),
+            last_key: Key::from_bytes(Bytes::copy_from_slice(&self.last_key)),
+        });
+        self.data.extend(encoded_block);
+    }
+
     /// Builds the SSTable and writes it to the given path. Use the `FileObject` structure to manipulate the disk objects.
     pub fn build(
-        self,
+        mut self,
         id: usize,
         block_cache: Option<Arc<BlockCache>>,
         path: impl AsRef<Path>,
@@ -89,52 +92,27 @@ impl SsTableBuilder {
         // | data block | ... | data block | metadata | meta block offset | bloom filter | bloom filter offset |
         // |                               |  varlen  |         u32       |    varlen    |        u32          |
         // -----------------------------------------------------------------------------------------------------
+        self.finish_block();
 
-        let mut block_meta = self.meta;
-        let mut data_blocks = self.data;
+        let mut buf = self.data;
+        let block_meta_offset = buf.len();
+        BlockMeta::encode_block_meta(&self.meta, &mut buf);
+        buf.put(&(block_meta_offset as u32).to_le_bytes()[..]);
 
-        if !self.builder.is_empty() {
-            let offset = data_blocks.len();
-            data_blocks.append(&mut self.builder.build().encode().to_vec());
-            block_meta.push(BlockMeta {
-                offset,
-                first_key: Key::from_bytes(Bytes::copy_from_slice(&self.first_key)),
-                last_key: Key::from_bytes(Bytes::copy_from_slice(&self.last_key)),
-            });
-        }
-        let mut metadata_buf = Vec::new();
-        BlockMeta::encode_block_meta(&block_meta, &mut metadata_buf);
-
-        let block_meta_offset = data_blocks.len();
-
-        let bits_per_key = Bloom::bloom_bits_per_key(self.keys.len(), 0.01);
-        let bloom = Bloom::build_from_key_hashes(&self.keys, bits_per_key);
-        let mut bloom_buf: Vec<u8> = Vec::new();
-        bloom.encode(&mut bloom_buf);
-        let bloom_offset = block_meta_offset + metadata_buf.len() + size_of::<u32>();
-
-        let data = [
-            data_blocks,
-            metadata_buf,
-            (block_meta_offset as u32).to_le_bytes().to_vec(),
-            bloom_buf,
-            (bloom_offset as u32).to_le_bytes().to_vec(),
-        ]
-        .concat();
-
-        let (first_key, last_key) = (
-            block_meta.first().unwrap().first_key.clone(),
-            block_meta.last().unwrap().last_key.clone(),
-        );
+        let bloom_offset = buf.len();
+        let bits_per_key = Bloom::bloom_bits_per_key(self.key_hashes.len(), 0.01);
+        let bloom = Bloom::build_from_key_hashes(&self.key_hashes, bits_per_key);
+        bloom.encode(&mut buf);
+        buf.put(&(bloom_offset as u32).to_le_bytes()[..]);
 
         Ok(SsTable {
-            file: FileObject::create(path.as_ref(), data)?,
-            block_meta,
+            file: FileObject::create(path.as_ref(), buf)?,
+            first_key: self.meta.first().unwrap().first_key.clone(),
+            last_key: self.meta.last().unwrap().last_key.clone(),
+            block_meta: self.meta,
             block_meta_offset,
             id,
             block_cache,
-            first_key,
-            last_key,
             bloom: Some(bloom),
             max_ts: 0,
         })

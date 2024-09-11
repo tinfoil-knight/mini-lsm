@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -18,29 +15,40 @@ pub struct SsTableIterator {
 impl SsTableIterator {
     /// Create a new iterator and seek to the first key-value pair in the first data block.
     pub fn create_and_seek_to_first(table: Arc<SsTable>) -> Result<Self> {
-        let block = table.read_block(0)?;
         Ok(Self {
+            blk_iter: BlockIterator::create_and_seek_to_first(table.read_block_cached(0)?),
             table,
-            blk_iter: BlockIterator::create_and_seek_to_first(block),
             blk_idx: 0,
         })
     }
 
     /// Seek to the first key-value pair in the first data block.
     pub fn seek_to_first(&mut self) -> Result<()> {
-        let block = self.table.read_block(0)?;
         self.blk_idx = 0;
-        self.blk_iter = BlockIterator::create_and_seek_to_first(block);
+        self.blk_iter = BlockIterator::create_and_seek_to_first(self.table.read_block(0)?);
         Ok(())
+    }
+
+    fn seek_to_key_inner(table: &Arc<SsTable>, key: KeySlice) -> Result<(usize, BlockIterator)> {
+        let mut blk_idx = table.find_block_idx(key);
+        let mut blk_iter =
+            BlockIterator::create_and_seek_to_key(table.read_block_cached(blk_idx)?, key);
+        if !blk_iter.is_valid() {
+            blk_idx += 1;
+            if blk_idx < table.num_of_blocks() {
+                blk_iter =
+                    BlockIterator::create_and_seek_to_first(table.read_block_cached(blk_idx)?);
+            }
+        }
+        Ok((blk_idx, blk_iter))
     }
 
     /// Create a new iterator and seek to the first key-value pair which >= `key`.
     pub fn create_and_seek_to_key(table: Arc<SsTable>, key: KeySlice) -> Result<Self> {
-        let blk_idx = table.find_block_idx(key);
-        let block = table.read_block(blk_idx)?;
+        let (blk_idx, blk_iter) = Self::seek_to_key_inner(&table, key)?;
         Ok(Self {
             table,
-            blk_iter: BlockIterator::create_and_seek_to_key(block, key),
+            blk_iter,
             blk_idx,
         })
     }
@@ -49,9 +57,7 @@ impl SsTableIterator {
     /// Note: You probably want to review the handout for detailed explanation when implementing
     /// this function.
     pub fn seek_to_key(&mut self, key: KeySlice) -> Result<()> {
-        self.blk_idx = self.table.find_block_idx(key);
-        let block = self.table.read_block(self.blk_idx)?;
-        self.blk_iter = BlockIterator::create_and_seek_to_key(block, key);
+        (self.blk_idx, self.blk_iter) = Self::seek_to_key_inner(&self.table, key)?;
         Ok(())
     }
 }
