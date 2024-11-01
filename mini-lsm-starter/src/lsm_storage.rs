@@ -402,11 +402,10 @@ impl LsmStorageInner {
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
         let _state_lock = self.state_lock.lock();
 
-        let earliest_memtable;
-        {
+        let earliest_memtable = {
             let guard = self.state.read();
-            earliest_memtable = guard.imm_memtables.last().unwrap().clone();
-        }
+            guard.imm_memtables.last().unwrap().clone()
+        };
 
         let mut builder = SsTableBuilder::new(self.options.block_size);
         earliest_memtable.flush(&mut builder)?;
@@ -482,14 +481,13 @@ impl LsmStorageInner {
 
         // note: we don't use the l1+ sstables since we don't write to them yet
 
-        let lsm_itr = LsmIterator::new(
+        Ok(FusedIterator::new(LsmIterator::new(
             TwoMergeIterator::create(
                 MergeIterator::create(memtable_iters),
                 MergeIterator::create(sst_iters),
             )?,
             map_bound(upper),
-        )?;
-        Ok(FusedIterator::new(lsm_itr))
+        )?))
     }
 
     pub fn key_within(key: &[u8], lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> bool {
